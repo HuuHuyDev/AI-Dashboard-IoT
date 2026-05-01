@@ -1,0 +1,308 @@
+services:
+  # Processing Database (Database per Service Pattern)
+  processing-db:
+    image: postgres:15-alpine
+    container_name: processing-db
+    environment:
+      POSTGRES_DB: processing_db
+      POSTGRES_USER: processing_user
+      POSTGRES_PASSWORD: processing_pass
+    ports:
+      - "5433:5432"
+    volumes:
+      - processing_db_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/processing_init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - iot-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U processing_user -d processing_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Query Database (CQRS Read Model)
+  query-db:
+    image: postgres:15-alpine
+    container_name: query-db
+    environment:
+      POSTGRES_DB: query_db
+      POSTGRES_USER: query_user
+      POSTGRES_PASSWORD: query_password
+    ports:
+      - "5434:5432"
+    volumes:
+      - query_db_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/query_init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - iot-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U query_user -d query_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: iot-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - iot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Chatbot Redis (Dedicated)
+  chatbot-redis:
+    image: redis:7-alpine
+    container_name: chatbot-redis
+    command: redis-server --requirepass chatbot_redis_pass
+    ports:
+      - "6380:6379"
+    volumes:
+      - chatbot_redis_data:/data
+    networks:
+      - iot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "chatbot_redis_pass", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Realtime Redis (Dedicated)
+  realtime-redis:
+    image: redis:7-alpine
+    container_name: realtime-redis
+    command: redis-server --requirepass realtime_redis_pass
+    ports:
+      - "6381:6379"
+    volumes:
+      - realtime_redis_data:/data
+    networks:
+      - iot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "realtime_redis_pass", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Ingestion Redis (Dedicated)
+  ingestion-redis:
+    image: redis:7-alpine
+    container_name: ingestion-redis
+    command: redis-server --requirepass ingestion_redis_pass
+    ports:
+      - "6382:6379"
+    volumes:
+      - ingestion_redis_data:/data
+    networks:
+      - iot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "ingestion_redis_pass", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Zookeeper (required for Kafka)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: iot-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - iot-network
+
+  # Kafka Message Broker
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: iot-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - iot-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # MQTT Broker
+  mqtt:
+    image: eclipse-mosquitto:2.0
+    container_name: iot-mqtt
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./infrastructure/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mqtt_data:/mosquitto/data
+      - mqtt_logs:/mosquitto/log
+    networks:
+      - iot-network
+
+  # Chatbot Service
+  chatbot-service:
+    build:
+      context: ./services/chatbot-service
+      dockerfile: Dockerfile
+    container_name: chatbot-service
+    ports:
+      - "${CHATBOT_SERVICE_PORT}:8001"
+    environment:
+      - REDIS_HOST=chatbot-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=chatbot_redis_pass
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL}
+      - QUERY_SERVICE_URL=http://query-service:8002
+    depends_on:
+      chatbot-redis:
+        condition: service_healthy
+    networks:
+      - iot-network
+    restart: unless-stopped
+
+  # Query Service (CQRS Pattern)
+  query-service:
+    build:
+      context: ./services/query-service
+      dockerfile: Dockerfile
+    container_name: query-service
+    ports:
+      - "${QUERY_SERVICE_PORT}:8002"
+    environment:
+      - QUERY_DB_HOST=query-db
+      - QUERY_DB_PORT=5432
+      - QUERY_DB_NAME=query_db
+      - QUERY_DB_USER=query_user
+      - QUERY_DB_PASSWORD=query_password
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}
+      - KAFKA_CONSUMER_GROUP=query-service-consumer
+      - KAFKA_AUTO_OFFSET_RESET=earliest
+      - KAFKA_EVENT_TOPIC_PREFIX=processing.
+      - CACHE_TTL=${CACHE_TTL}
+    depends_on:
+      query-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - iot-network
+    restart: unless-stopped
+
+  # Realtime Service
+  realtime-service:
+    build:
+      context: ./services/realtime-service
+      dockerfile: Dockerfile
+    container_name: realtime-service
+    ports:
+      - "${REALTIME_SERVICE_PORT}:8003"
+    environment:
+      - REDIS_HOST=realtime-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=realtime_redis_pass
+      - REDIS_CHANNELS=iot_events,processing.*
+      - WS_MAX_CONNECTIONS=1000
+      - WS_HEARTBEAT_INTERVAL=30
+    depends_on:
+      realtime-redis:
+        condition: service_healthy
+    networks:
+      - iot-network
+    restart: unless-stopped
+
+  # Ingestion Service
+  ingestion-service:
+    build:
+      context: ./services/ingestion-service
+      dockerfile: Dockerfile
+    container_name: ingestion-service
+    ports:
+      - "${INGESTION_SERVICE_PORT}:8004"
+    environment:
+      - MQTT_BROKER=${MQTT_BROKER}
+      - MQTT_PORT=${MQTT_PORT}
+      - MQTT_TOPIC=${MQTT_TOPIC}
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}
+      - KAFKA_TOPIC_IOT_LOGS=${KAFKA_TOPIC_IOT_LOGS}
+      - REDIS_HOST=ingestion-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=ingestion_redis_pass
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
+      ingestion-redis:
+        condition: service_healthy
+    networks:
+      - iot-network
+    restart: unless-stopped
+
+  # Processing Service
+  processing-service:
+    build:
+      context: ./services/processing-service
+      dockerfile: Dockerfile
+    container_name: processing-service
+    ports:
+      - "${PROCESSING_SERVICE_PORT}:8005"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}
+      - KAFKA_TOPIC_IOT_LOGS=${KAFKA_TOPIC_IOT_LOGS}
+      - PROCESSING_DB_HOST=processing-db
+      - PROCESSING_DB_PORT=5432
+      - PROCESSING_DB_NAME=processing_db
+      - PROCESSING_DB_USER=processing_user
+      - PROCESSING_DB_PASSWORD=processing_pass
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      processing-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - iot-network
+    restart: unless-stopped
+
+networks:
+  iot-network:
+    driver: bridge
+
+volumes:
+  processing_db_data:
+  query_db_data:
+  redis_data:
+  chatbot_redis_data:
+  realtime_redis_data:
+  ingestion_redis_data:
+  mqtt_data:
+  mqtt_logs:
