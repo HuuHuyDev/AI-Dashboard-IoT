@@ -68,6 +68,8 @@ class ChatResponse(BaseModel):
     chart: Optional[ChartConfig] = Field(None, description="Chart configuration")
     source: Optional[str] = Field(None, description="Data source: cache or database")
     execution_time: Optional[float] = Field(None, description="Query execution time in seconds")
+    session_id: Optional[str] = Field(None, description="Session ID for conversation context")
+    explanation: Optional[str] = Field(None, description="Explanation of the query results")
     
     class Config:
         json_schema_extra = {

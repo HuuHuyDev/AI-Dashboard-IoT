@@ -58,7 +58,8 @@ class ChatbotService:
                 sql=sql_response.sql,
                 data=query_result.get("data", []),
                 chart=sql_response.chart,
-                source=query_result.get("source", "database")
+                source=query_result.get("source", "database"),
+                explanation=sql_response.explanation
             )
             
         except Exception as e:

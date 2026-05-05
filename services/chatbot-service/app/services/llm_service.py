@@ -11,6 +11,7 @@ import google.generativeai as genai
 from app.models.schemas import SQLResponse, ChartConfig
 from app.core.config import settings
 from app.core.redis_client import redis_client
+from app.services.sql_validator import sql_validator
 
 logger = logging.getLogger(__name__)
 
@@ -75,48 +76,52 @@ class LLMService:
             "max_output_tokens": self.max_tokens,
         }
         
-        # Define function declaration for Gemini
-        self.generate_sql_function = {
-            "name": "generate_sql",
-            "description": "Generate a SQL query based on natural language input",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "sql": {
-                        "type": "string",
-                        "description": "The generated SQL SELECT query"
-                    },
-                    "explanation": {
-                        "type": "string",
-                        "description": "Brief explanation of what the query does"
-                    },
-                    "chart_type": {
-                        "type": "string",
-                        "enum": ["line", "bar", "pie", "scatter", "table"],
-                        "description": "Recommended chart type for visualization"
-                    },
-                    "x_axis": {
-                        "type": "string",
-                        "description": "Column name for X-axis (if applicable)"
-                    },
-                    "y_axis": {
-                        "type": "string",
-                        "description": "Column name for Y-axis (if applicable)"
-                    },
-                    "chart_title": {
-                        "type": "string",
-                        "description": "Suggested title for the chart"
-                    }
+        # Define function declaration for Gemini (correct format)
+        generate_sql_func = genai.protos.FunctionDeclaration(
+            name="generate_sql",
+            description="Generate a SQL query based on natural language input",
+            parameters=genai.protos.Schema(
+                type=genai.protos.Type.OBJECT,
+                properties={
+                    "sql": genai.protos.Schema(
+                        type=genai.protos.Type.STRING,
+                        description="The generated SQL SELECT query"
+                    ),
+                    "explanation": genai.protos.Schema(
+                        type=genai.protos.Type.STRING,
+                        description="Brief explanation of what the query does"
+                    ),
+                    "chart_type": genai.protos.Schema(
+                        type=genai.protos.Type.STRING,
+                        description="Recommended chart type: line, bar, pie, scatter, or table"
+                    ),
+                    "x_axis": genai.protos.Schema(
+                        type=genai.protos.Type.STRING,
+                        description="Column name for X-axis (if applicable)"
+                    ),
+                    "y_axis": genai.protos.Schema(
+                        type=genai.protos.Type.STRING,
+                        description="Column name for Y-axis (if applicable)"
+                    ),
+                    "chart_title": genai.protos.Schema(
+                        type=genai.protos.Type.STRING,
+                        description="Suggested title for the chart"
+                    )
                 },
-                "required": ["sql", "explanation", "chart_type"]
-            }
-        }
+                required=["sql", "explanation", "chart_type"]
+            )
+        )
+        
+        # Create tool from function declaration
+        sql_tool = genai.protos.Tool(
+            function_declarations=[generate_sql_func]
+        )
         
         # Initialize model with tools
         self.model = genai.GenerativeModel(
             model_name=self.model_name,
             generation_config=self.generation_config,
-            tools=[self.generate_sql_function]
+            tools=[sql_tool]
         )
     
     async def generate_sql(self, prompt: str) -> SQLResponse:
@@ -130,18 +135,22 @@ class LLMService:
             SQLResponse with SQL query and chart configuration
         """
         try:
+            # Sanitize user input trước khi xử lý
+            sanitized_prompt = sql_validator.sanitize_input(prompt)
+            logger.info(f"Processing prompt: {sanitized_prompt[:100]}...")
+            
             # Check cache first
-            prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
+            prompt_hash = hashlib.md5(sanitized_prompt.encode()).hexdigest()
             cache_key = f"sql_cache:{prompt_hash}"
             
             cached_result = await redis_client.get(cache_key)
             if cached_result:
-                logger.info(f"Cache hit for prompt: {prompt[:50]}...")
+                logger.info(f"Cache hit for prompt: {sanitized_prompt[:50]}...")
                 cached_data = json.loads(cached_result)
                 return SQLResponse(**cached_data)
             
             # Prepare the full prompt with system context
-            full_prompt = f"{self.SYSTEM_PROMPT}\n\nUser Query: {prompt}"
+            full_prompt = f"{self.SYSTEM_PROMPT}\n\nUser Query: {sanitized_prompt}"
             
             # Start chat session
             chat = self.model.start_chat(enable_automatic_function_calling=False)
@@ -189,11 +198,16 @@ class LLMService:
             for key, value in function_call.args.items():
                 function_args[key] = value
             
-            # Validate SQL (basic check)
+            # Lấy SQL từ function call
             sql = function_args.get("sql", "").strip()
-            if not sql.upper().startswith("SELECT"):
-                logger.error(f"Invalid SQL generated: {sql}")
-                raise ValueError("Only SELECT queries are allowed")
+            
+            # QUAN TRỌNG: Validate SQL để đảm bảo bảo mật
+            is_valid, error_message = sql_validator.validate(sql)
+            if not is_valid:
+                logger.error(f"SQL validation failed: {error_message}")
+                raise ValueError(f"Security validation failed: {error_message}")
+            
+            logger.info(f"SQL validation passed: {sql[:100]}...")
             
             # Build chart configuration
             chart = None
@@ -219,7 +233,7 @@ class LLMService:
                     json.dumps(cache_data, default=str),
                     ttl=settings.SQL_CACHE_TTL
                 )
-                logger.info(f"Cached SQL for prompt: {prompt[:50]}...")
+                logger.info(f"Cached SQL for prompt: {sanitized_prompt[:50]}...")
             except Exception as cache_error:
                 logger.warning(f"Failed to cache result: {cache_error}")
             

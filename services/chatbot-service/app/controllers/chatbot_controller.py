@@ -9,6 +9,7 @@ import time
 from app.models.schemas import ChatRequest, ChatResponse, ErrorResponse
 from app.services.chatbot_service import ChatbotService
 from app.services.session_service import SessionService
+from app.services.sql_validator import sql_validator
 
 logger = logging.getLogger(__name__)
 
@@ -152,3 +153,23 @@ async def clear_session(
 async def health_check() -> Dict[str, str]:
     """Health check endpoint"""
     return {"status": "healthy", "service": "chatbot-controller"}
+
+
+@router.get("/validation-rules")
+async def get_validation_rules() -> Dict[str, Any]:
+    """
+    Get SQL validation rules and security policies
+    
+    Returns:
+        Dictionary containing validation rules
+    """
+    try:
+        rules = sql_validator.get_validation_summary()
+        return {
+            "status": "success",
+            "validation_rules": rules,
+            "description": "SQL security validation rules for chatbot queries"
+        }
+    except Exception as e:
+        logger.error(f"Error getting validation rules: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
