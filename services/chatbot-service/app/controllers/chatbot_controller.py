@@ -57,10 +57,14 @@ async def chat(
             # Update session activity
             await session_service.update_activity(session_id)
         
-        # Process the chat request
+        # Fetch conversation history for multi-turn context
+        history = await session_service.get_history(session_id, limit=6)
+
+        # Process the chat request (MCP agentic loop)
         response = await chatbot_service.process_query(
             prompt=request.prompt,
-            session_id=session_id
+            session_id=session_id,
+            conversation_history=history,
         )
         
         # Store message in history
