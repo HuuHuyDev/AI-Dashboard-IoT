@@ -20,20 +20,27 @@ class Settings(BaseSettings):
 
     # Google Gemini Configuration
     GEMINI_API_KEY:     str
-    GEMINI_MODEL:       str   = "gemini-1.5-pro"
+    GEMINI_MODEL:       str   = "gemini-2.5-flash"
     GEMINI_TEMPERATURE: float = 0.1
     GEMINI_MAX_TOKENS:  int   = 4096   # increased for multi-turn tool responses
+    
+    # Gemini Rate Limiting (Optimized for faster responses)
+    GEMINI_MAX_RPM:                int   = 15    # requests per minute
+    GEMINI_RPM_WINDOW_SEC:         int   = 60    # window in seconds
+    GEMINI_429_MAX_RETRIES:        int   = 3     # max retry attempts
+    GEMINI_429_MAX_TOTAL_WAIT_SEC: float = 120.0 # max total wait time
 
     # Query Service (executes final SQL + Redis cache)
     QUERY_SERVICE_URL: str = "http://query-service:8002"
 
     # ── NEW: PostgreSQL direct access for MCP tools ──────────────────────────
     # MCP tools query information_schema and pg_class for real schema discovery
-    POSTGRES_HOST:     str = "postgres"
+    # Connects to processing-db (the source of truth for IoT data)
+    POSTGRES_HOST:     str = "processing-db"
     POSTGRES_PORT:     int = 5432
-    POSTGRES_USER:     str = "iot_user"
-    POSTGRES_PASSWORD: str = "iot_password_2024"
-    POSTGRES_DB:       str = "iot_dashboard"
+    POSTGRES_USER:     str = "processing_user"
+    POSTGRES_PASSWORD: str = "processing_pass"
+    POSTGRES_DB:       str = "processing_db"
 
     # Application
     ENVIRONMENT: str = "production"

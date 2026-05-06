@@ -18,6 +18,7 @@ real device IDs, and the correct date range – no more hallucinations.
 import hashlib
 import json
 import logging
+import re
 from typing import Optional
 
 import google.generativeai as genai
@@ -156,8 +157,32 @@ class LLMService:
             tool_names = [t["tool"] for t in tool_trace]
             logger.info(f"[LLM] Tools called: {tool_names}")
 
-        # ── 4. Extract & validate SQL ──────────────────────────────────────
+        # ── 4. Extract data from execute_sql_query tool if available ──────
+        query_data = None
+        query_row_count = None
+        query_source = None
+        query_cached = None
+        
+        for trace in tool_trace:
+            if trace["tool"] == "execute_sql_query":
+                try:
+                    result = json.loads(trace["result"])
+                    if result.get("success"):
+                        query_data = result.get("data", [])
+                        query_row_count = result.get("row_count")
+                        query_source = result.get("source")
+                        query_cached = result.get("cached")
+                        logger.info(f"[LLM] Found data from execute_sql_query: {query_row_count} rows, source={query_source}")
+                        break
+                except Exception as e:
+                    logger.warning(f"[LLM] Failed to parse execute_sql_query result: {e}")
+
+        # ── 5. Extract & validate SQL ──────────────────────────────────────
         sql = (final_args.get("sql") or "").strip()
+        # Many models include a trailing ';' for SQL statements.
+        # Our SQLValidator treats ';' as a possible multi-statement injection marker,
+        # so strip ONLY trailing semicolons (keep protection against embedded ';').
+        sql = re.sub(r";+\s*$", "", sql).strip()
 
         if not sql:
             logger.warning("[LLM] finalize_response returned empty SQL")
@@ -174,7 +199,7 @@ class LLMService:
 
         logger.info(f"[LLM] SQL validated: {sql[:120]}")
 
-        # ── 5. Build chart config ──────────────────────────────────────────
+        # ── 6. Build chart config ──────────────────────────────────────────
         chart_type = final_args.get("chart_type", "table")
         chart: Optional[ChartConfig] = None
         if chart_type and chart_type.lower() != "table":
@@ -189,9 +214,13 @@ class LLMService:
             sql         = sql,
             chart       = chart,
             explanation = final_args.get("explanation", ""),
+            data        = query_data,
+            row_count   = query_row_count,
+            source      = query_source,
+            cached      = query_cached,
         )
 
-        # ── 6. Cache result ────────────────────────────────────────────────
+        # ── 7. Cache result ────────────────────────────────────────────────
         try:
             await redis_client.set(
                 cache_key,

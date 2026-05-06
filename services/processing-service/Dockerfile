@@ -19,4 +19,4 @@ COPY . .
 EXPOSE 8005
 
 # Run the application
-CMD ["python", "app/main.py"]
+CMD ["python", "-m", "app.main"]

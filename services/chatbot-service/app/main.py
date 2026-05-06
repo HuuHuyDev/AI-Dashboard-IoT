@@ -10,6 +10,7 @@ import logging
 from app.controllers import chatbot_controller
 from app.core.config import settings
 from app.core.redis_client import redis_client
+from app.mcp.database import mcp_database
 
 # Configure logging
 logging.basicConfig(
@@ -35,10 +36,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Redis connection failed: {e}")
     
+    # Connect to MCP Database
+    try:
+        await mcp_database.connect()
+        logger.info("MCP Database connection successful")
+    except Exception as e:
+        logger.error(f"MCP Database connection failed: {e}")
+    
     yield
     
     logger.info("Shutting down Chatbot Service...")
     await redis_client.close()
+    await mcp_database.close()
 
 
 # Initialize FastAPI application

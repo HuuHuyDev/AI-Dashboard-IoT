@@ -60,10 +60,20 @@ class ChatbotService:
 
             logger.info(f"[ChatbotService] SQL generated: {sql_response.sql[:120]}")
 
-            # Step 2: execute_sql_query MCP tool already fetched data during the
-            # agentic loop; but we still forward the final SQL to Query Service
-            # so the result goes through Redis cache properly.
-            query_result = await self._execute_query(sql_response.sql)
+            # Step 2: Use data from MCP tool if available, otherwise query Query Service
+            if sql_response.data is not None:
+                # Data already fetched by execute_sql_query MCP tool
+                logger.info(f"[ChatbotService] Using data from MCP tool: {sql_response.row_count} rows")
+                query_result = {
+                    "data": sql_response.data,
+                    "row_count": sql_response.row_count or len(sql_response.data),
+                    "source": sql_response.source or "database",
+                    "cached": sql_response.cached or False,
+                }
+            else:
+                # Fallback: query Query Service (for cases where execute_sql_query wasn't called)
+                logger.info("[ChatbotService] No data from MCP tool, querying Query Service")
+                query_result = await self._execute_query(sql_response.sql)
 
             # Step 3: build human-readable message
             message = self._build_message(query_result)

@@ -109,5 +109,14 @@ class RedisClient:
             return []
 
 
+    async def delete(self, *names: str) -> int:
+        """Delete one or more keys"""
+        try:
+            return await self.client.delete(*names)
+        except Exception as e:
+            logger.error(f"Redis DELETE error: {e}")
+            return 0
+
+
 # Global Redis client instance
 redis_client = RedisClient()

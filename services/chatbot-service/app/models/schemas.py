@@ -44,6 +44,10 @@ class SQLResponse(BaseModel):
     sql: str = Field(..., description="Generated SQL query")
     chart: Optional[ChartConfig] = Field(None, description="Chart configuration")
     explanation: Optional[str] = Field(None, description="Query explanation")
+    data: Optional[List[Dict[str, Any]]] = Field(None, description="Query results from MCP tool")
+    row_count: Optional[int] = Field(None, description="Number of rows returned")
+    source: Optional[str] = Field(None, description="Data source: cache or database")
+    cached: Optional[bool] = Field(None, description="Whether data was cached")
     
     class Config:
         json_schema_extra = {
@@ -55,7 +59,11 @@ class SQLResponse(BaseModel):
                     "y": "avg_temp",
                     "title": "Average Temperature by Device"
                 },
-                "explanation": "This query calculates the average temperature for each device in the last 24 hours"
+                "explanation": "This query calculates the average temperature for each device in the last 24 hours",
+                "data": [{"device_id": "SENSOR_001", "avg_temp": 22.5}],
+                "row_count": 2,
+                "source": "database",
+                "cached": False
             }
         }
 
