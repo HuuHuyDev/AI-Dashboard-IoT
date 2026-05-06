@@ -34,7 +34,10 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Query Service...")
     logger.info(f"Database: {settings.QUERY_DB_HOST}:{settings.QUERY_DB_PORT}/{settings.QUERY_DB_NAME}")
     logger.info(f"Redis: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
-    logger.info(f"Kafka: {settings.KAFKA_BOOTSTRAP_SERVERS}")
+    if settings.ENABLE_KAFKA_CONSUMER:
+        logger.info(f"Kafka: {settings.KAFKA_BOOTSTRAP_SERVERS}")
+    else:
+        logger.info("Kafka consumer: disabled")
     
     # Test database connection
     try:
@@ -50,15 +53,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Redis connection failed: {e}")
     
-    # Start event consumer
-    try:
-        read_model_service = ReadModelService()
-        event_consumer_task = asyncio.create_task(
-            event_consumer.start(read_model_service)
-        )
-        logger.info("Event consumer started")
-    except Exception as e:
-        logger.error(f"Failed to start event consumer: {e}")
+    # Start event consumer (optional)
+    if settings.ENABLE_KAFKA_CONSUMER:
+        try:
+            read_model_service = ReadModelService()
+            event_consumer_task = asyncio.create_task(
+                event_consumer.start(read_model_service)
+            )
+            logger.info("Event consumer started")
+        except Exception as e:
+            logger.error(f"Failed to start event consumer: {e}")
     
     yield
     

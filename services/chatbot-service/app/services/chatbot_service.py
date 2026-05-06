@@ -1,12 +1,13 @@
 """
 Chatbot Service - Business Logic
-Orchestrates LLM service and Query service
+Orchestrates LLM service and Query service with MCP agentic SQL generation
 """
 import logging
+import time
 import httpx
-from typing import Optional
+from typing import Optional, List
 
-from app.models.schemas import ChatResponse, ChartConfig
+from app.models.schemas import ChatResponse
 from app.services.llm_service import LLMService
 from app.core.config import settings
 
@@ -14,109 +15,125 @@ logger = logging.getLogger(__name__)
 
 
 class ChatbotService:
-    """Chatbot service for processing natural language queries"""
-    
+    """Chatbot service for processing natural language queries via MCP+LLM"""
+
     def __init__(self):
         self.llm_service = LLMService()
         self.query_service_url = settings.QUERY_SERVICE_URL
-    
-    async def process_query(self, prompt: str, session_id: Optional[str] = None) -> ChatResponse:
+
+    async def process_query(
+        self,
+        prompt: str,
+        session_id: Optional[str] = None,
+        conversation_history: Optional[List[dict]] = None,
+    ) -> ChatResponse:
         """
-        Process user query through LLM and execute SQL
-        
+        Process user query through the MCP agentic loop and return results.
+
         Args:
-            prompt: User's natural language query
-            session_id: Optional session ID for context
-            
+            prompt:               User's natural language query
+            session_id:           Optional session ID for logging
+            conversation_history: Previous messages for multi-turn context
+
         Returns:
-            ChatResponse with results
+            ChatResponse with SQL, data, chart config, and explanation
         """
+        start = time.time()
         try:
-            # Step 1: Generate SQL and chart config using LLM
-            logger.info("Generating SQL from prompt...")
-            sql_response = await self.llm_service.generate_sql(prompt)
-            
+            # Step 1: MCP agentic loop → generates and validates SQL
+            logger.info(f"[ChatbotService] Processing prompt (session={session_id}): {prompt[:80]}")
+            sql_response = await self.llm_service.generate_sql(
+                prompt=prompt,
+                conversation_history=conversation_history,
+            )
+
             if not sql_response.sql:
                 return ChatResponse(
-                    message="I couldn't generate a valid SQL query from your request. Please try rephrasing.",
+                    message=(
+                        "I couldn't generate a valid SQL query from your request. "
+                        "Please try rephrasing."
+                    ),
                     sql=None,
                     data=None,
-                    chart=None
+                    chart=None,
                 )
-            
-            logger.info(f"Generated SQL: {sql_response.sql}")
-            
-            # Step 2: Execute SQL through Query Service
-            logger.info("Executing SQL query...")
-            query_result = await self._execute_query(sql_response.sql)
-            
-            # Step 3: Build response
-            message = self._build_response_message(prompt, query_result)
-            
-            return ChatResponse(
-                message=message,
-                sql=sql_response.sql,
-                data=query_result.get("data", []),
-                chart=sql_response.chart,
-                source=query_result.get("source", "database")
+
+            logger.info(f"[ChatbotService] SQL generated: {sql_response.sql[:120]}")
+
+            # Step 2: Use data from MCP tool if available, otherwise query Query Service
+            if sql_response.data is not None:
+                # Data already fetched by execute_sql_query MCP tool
+                logger.info(f"[ChatbotService] Using data from MCP tool: {sql_response.row_count} rows")
+                query_result = {
+                    "data": sql_response.data,
+                    "row_count": sql_response.row_count or len(sql_response.data),
+                    "source": sql_response.source or "database",
+                    "cached": sql_response.cached or False,
+                }
+            else:
+                # Fallback: query Query Service (for cases where execute_sql_query wasn't called)
+                logger.info("[ChatbotService] No data from MCP tool, querying Query Service")
+                query_result = await self._execute_query(sql_response.sql)
+
+            # Step 3: build human-readable message
+            message = self._build_message(query_result)
+
+            execution_time = time.time() - start
+            logger.info(
+                f"[ChatbotService] Completed in {execution_time:.2f}s, "
+                f"rows={query_result.get('row_count', 0)}, source={query_result.get('source')}"
             )
-            
-        except Exception as e:
-            logger.error(f"Error processing query: {str(e)}", exc_info=True)
+
             return ChatResponse(
-                message=f"I encountered an error processing your request: {str(e)}",
-                sql=None,
-                data=None,
-                chart=None
+                message        = message,
+                sql            = sql_response.sql,
+                data           = query_result.get("data", []),
+                chart          = sql_response.chart,
+                source         = query_result.get("source", "database"),
+                explanation    = sql_response.explanation,
+                execution_time = execution_time,
             )
-    
+
+        except Exception as exc:
+            logger.error(f"[ChatbotService] Error: {exc}", exc_info=True)
+            return ChatResponse(
+                message=f"I encountered an error processing your request: {exc}",
+                sql    = None,
+                data   = None,
+                chart  = None,
+            )
+
+    # ── private helpers ────────────────────────────────────────────────────
+
     async def _execute_query(self, sql: str) -> dict:
-        """
-        Execute SQL query through Query Service
-        
-        Args:
-            sql: SQL query to execute
-            
-        Returns:
-            Query results
-        """
+        """Forward SQL to Query Service (handles Redis cache + security)."""
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
+                resp = await client.post(
                     f"{self.query_service_url}/api/v1/query/execute",
-                    json={"sql": sql}
+                    json={"sql": sql},
                 )
-                response.raise_for_status()
-                return response.json()
-                
+                resp.raise_for_status()
+                return resp.json()
+
         except httpx.TimeoutException:
-            logger.error("Query service timeout")
+            logger.error("[ChatbotService] Query Service timeout")
             raise Exception("Query execution timed out. Please try a simpler query.")
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Query service HTTP error: {e.response.status_code}")
-            raise Exception(f"Query execution failed: {e.response.text}")
-        except Exception as e:
-            logger.error(f"Error executing query: {str(e)}")
-            raise Exception(f"Failed to execute query: {str(e)}")
-    
-    def _build_response_message(self, prompt: str, query_result: dict) -> str:
-        """
-        Build human-readable response message
-        
-        Args:
-            prompt: Original user prompt
-            query_result: Query execution results
-            
-        Returns:
-            Response message
-        """
-        data = query_result.get("data", [])
+        except httpx.HTTPStatusError as exc:
+            logger.error(f"[ChatbotService] Query Service HTTP {exc.response.status_code}")
+            raise Exception(f"Query execution failed: {exc.response.text}")
+        except Exception as exc:
+            logger.error(f"[ChatbotService] _execute_query error: {exc}")
+            raise Exception(f"Failed to execute query: {exc}")
+
+    @staticmethod
+    def _build_message(query_result: dict) -> str:
+        """Build a short human-readable summary of the query outcome."""
+        data   = query_result.get("data", [])
         source = query_result.get("source", "database")
-        
+
         if not data:
             return "No data found matching your query."
-        
-        row_count = len(data)
-        source_text = "from cache" if source == "cache" else "from database"
-        
-        return f"Found {row_count} result(s) {source_text}. The data is displayed below."
+
+        source_label = "from cache" if source == "cache" else "from database"
+        return f"Found {len(data)} result(s) {source_label}. The data is displayed below."

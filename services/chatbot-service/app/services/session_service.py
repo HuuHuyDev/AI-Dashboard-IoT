@@ -162,7 +162,7 @@ class SessionService:
             session_id: Session ID
         """
         try:
-            await self.redis.client.delete(f"chat_history:{session_id}")
+            await self.redis.delete(f"chat_history:{session_id}")
             logger.info(f"Cleared history for session {session_id}")
             
         except Exception as e:

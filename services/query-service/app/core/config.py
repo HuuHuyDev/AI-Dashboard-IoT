@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     KAFKA_AUTO_OFFSET_RESET: str = "earliest"
     KAFKA_EVENT_TOPIC_PREFIX: str = "processing."
     BATCH_SIZE: int = 100
+
+    # Kafka Consumer (CQRS read-model updater)
+    # Query execution + caching do NOT require Kafka. Enable this only if you
+    # implement/need consuming `processing.*` events to update the read model.
+    ENABLE_KAFKA_CONSUMER: bool = False
     
     # Cache Configuration
     CACHE_TTL: int = 300  # 5 minutes
