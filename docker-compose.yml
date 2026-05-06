@@ -173,8 +173,15 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL}
       - QUERY_SERVICE_URL=http://query-service:8002
+      - POSTGRES_HOST=processing-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=processing_user
+      - POSTGRES_PASSWORD=processing_pass
+      - POSTGRES_DB=processing_db
     depends_on:
       chatbot-redis:
+        condition: service_healthy
+      processing-db:
         condition: service_healthy
     networks:
       - iot-network
