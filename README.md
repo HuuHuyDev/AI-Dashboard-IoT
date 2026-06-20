@@ -2,7 +2,7 @@
 # AI-Powered IoT Dashboard - Backend System
 
 High Level System
-<img width="1024" height="559" alt="image" src="https://github.com/user-attachments/assets/3adeaf50-49d2-4b6c-a6fe-27c1c3e9f31c" />
+<img width="1024" height="559" alt="image" src="https://github.com/user-attachments/assets/948057ea-c2b5-42d5-8df5-a6f7532af29c" />
 
 
 A production-ready microservices-based backend system for an AI-powered IoT dashboard using FastAPI, PostgreSQL, Redis, Kafka, and MQTT.
